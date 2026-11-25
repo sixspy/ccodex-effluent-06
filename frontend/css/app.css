@@ -198,3 +198,31 @@ pre {
   max-height: 280px;
   overflow: auto;
 }
+/* effluent-06 停用禁采五页同态 */
+.badge-down {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--danger);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+tr.row-down { background: rgba(163, 59, 45, 0.06); }
+tr.row-down td { text-decoration: none; }
+.flow-zero { font-weight: 800; color: var(--danger); }
+.ruling-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-left: 4px solid var(--danger);
+  background: #fbf1ef;
+}
+.ruling-bar strong { color: var(--danger); }
+button.tiny { padding: 0.2rem 0.55rem; font-size: 0.78rem; }
+.actions-cell { white-space: nowrap; }
+.compact-stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 0.6rem; }
+.compact-stats .stat { padding: 0.6rem 0.8rem; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }

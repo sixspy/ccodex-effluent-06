@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
 from db import connect, now_iso, write_audit
-from locks import release, require_lock
+from locks import acquire_session_lock, release_session_lock
 from models import SampleIn
 from validators import (
     adjudicate_exceed,
@@ -19,6 +19,9 @@ from validators import (
 )
 
 router = APIRouter(tags=["samples"])
+
+DOWN_STATUS = "停用"
+DEVIATION_ACTION = "停用禁采偏航"
 
 
 def _next_sample_code(conn, outfall_id: int) -> str:
@@ -32,11 +35,36 @@ def _next_sample_code(conn, outfall_id: int) -> str:
     return f"SM-{prefix}-{n + 1:03d}"
 
 
+def _record_down_deviation(user: str, body: SampleIn, outfall) -> None:
+    """停用口强写裁决：偏航痕另笔提交，绝不随采样整笔回退而丢失。"""
+    with connect() as conn:
+        write_audit(
+            conn,
+            user,
+            DEVIATION_ACTION,
+            outfall["outfall_code"],
+            {
+                "outfall_id": body.outfall_id,
+                "outfall_code": outfall["outfall_code"],
+                "attempt_sample_code": body.sample_code,
+                "permit_ref": body.permit_ref,
+                "ruling": "effluent-06",
+                "ruling_path": "甲",
+                "decision": "拒写·正式区零增·整笔回退",
+                "marker": DEVIATION_ACTION,
+                "date_lock": "2026-11-25",
+            },
+        )
+        conn.commit()
+
+
 @router.get("/api/samples")
 def list_samples(authorization: AuthHeader = None, status: str | None = None):
     require_user(authorization)
     with connect() as conn:
-        q = """SELECT s.*, o.outfall_code, p.plant_code FROM sample_batches s
+        q = """SELECT s.*, o.outfall_code, o.status AS outfall_status,
+                      p.plant_code
+               FROM sample_batches s
                JOIN outfalls o ON o.id=s.outfall_id
                JOIN plants p ON p.id=o.plant_id"""
         if status:
@@ -58,7 +86,8 @@ def get_sample(sample_id: int, authorization: AuthHeader = None):
     require_user(authorization)
     with connect() as conn:
         row = conn.execute(
-            """SELECT s.*, o.outfall_code, o.cod_limit, o.nh3n_limit, o.tp_limit,
+            """SELECT s.*, o.outfall_code, o.status AS outfall_status,
+                      o.cod_limit, o.nh3n_limit, o.tp_limit,
                       p.name plant_name
                FROM sample_batches s
                JOIN outfalls o ON o.id=s.outfall_id
@@ -94,9 +123,12 @@ def get_sample(sample_id: int, authorization: AuthHeader = None):
 def create_sample(body: SampleIn, authorization: AuthHeader = None):
     user = require_writer(authorization)
     lock_key = f"outfall:{body.outfall_id}"
-    with connect() as conn:
-        require_lock(conn, lock_key, user)
-        try:
+    # 会话级口锁：两路同口抢建在此原子仲裁，后到 409 且只留争用痕。
+    token = acquire_session_lock(lock_key, user)
+    try:
+        # 单一业务事务：成功才 commit，任何异常都由 with 上下文整笔 rollback，
+        # 绝不再在 finally 里 commit 把半成品/锁一起提交。
+        with connect() as conn:
             outfall = conn.execute(
                 """SELECT o.*, p.status plant_status, p.design_cap_m3d
                    FROM outfalls o JOIN plants p ON p.id=o.plant_id WHERE o.id=?""",
@@ -104,6 +136,16 @@ def create_sample(body: SampleIn, authorization: AuthHeader = None):
             ).fetchone()
             if not outfall:
                 raise HTTPException(404, "排放口不存在")
+
+            # effluent-06 停用禁采（甲路径）：先留 durable 偏航裁决痕，再拒写。
+            if outfall["status"] == DOWN_STATUS:
+                _record_down_deviation(user, body, outfall)
+                raise HTTPException(
+                    400,
+                    f"停用排放口禁采样：{outfall['outfall_code']} 已停用，"
+                    "按 effluent-06 停用禁采裁决（甲）拒写正式批并整笔回退，"
+                    f"已记 {DEVIATION_ACTION}",
+                )
             validate_outfall_open(outfall["status"])
             validate_plant_running(outfall["plant_status"])
             metrics = body.metrics.model_dump()
@@ -187,7 +229,7 @@ def create_sample(body: SampleIn, authorization: AuthHeader = None):
                 "status": status,
                 "exceed": exceeded,
                 "hold_key": hold,
+                "outfall_lock": lock_key,
             }
-        finally:
-            release(conn, lock_key, user)
-            conn.commit()
+    finally:
+        release_session_lock(lock_key, token)

@@ -26,6 +26,7 @@ export function createApi(getToken, onUnauthorized) {
     createPlant: (body) => request("/api/plants", { method: "POST", body: JSON.stringify(body) }),
     outfalls: () => request("/api/outfalls"),
     outfall: (id) => request("/api/outfalls/" + id),
+    ruling: () => request("/api/rulings/down-sampling"),
     createOutfall: (body) => request("/api/outfalls", { method: "POST", body: JSON.stringify(body) }),
     setOutfallStatus: (id, status) => request("/api/outfalls/" + id + "/status?status=" + encodeURIComponent(status), { method: "POST" }),
     samples: (status) => request("/api/samples" + (status ? ("?status=" + encodeURIComponent(status)) : "")),

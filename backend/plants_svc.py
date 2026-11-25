@@ -21,7 +21,19 @@ def list_plants(authorization: AuthHeader = None):
             out_n = conn.execute(
                 "SELECT COUNT(*) c FROM outfalls WHERE plant_id=?", (r["id"],)
             ).fetchone()["c"]
+            down_n = conn.execute(
+                "SELECT COUNT(*) c FROM outfalls WHERE plant_id=? AND status='停用'",
+                (r["id"],),
+            ).fetchone()["c"]
+            maint_n = conn.execute(
+                "SELECT COUNT(*) c FROM outfalls WHERE plant_id=? AND status='检修'",
+                (r["id"],),
+            ).fetchone()["c"]
             d["outfall_count"] = out_n
+            d["down_outfall_count"] = down_n
+            d["maintenance_outfall_count"] = maint_n
+            # 下属口停用态与排放口服务同源 outfalls.status。
+            d["has_down_outfall"] = down_n > 0
             items.append(d)
         return {"items": items}
 
@@ -39,10 +51,23 @@ def get_plant(plant_id: int, authorization: AuthHeader = None):
         permits = conn.execute(
             "SELECT * FROM discharge_permits WHERE plant_id=? ORDER BY id", (plant_id,)
         ).fetchall()
+        outfall_items = []
+        status_summary = {"开放": 0, "停用": 0, "检修": 0}
+        down_codes = []
+        for o in outfalls:
+            od = dict(o)
+            od["sampling_allowed"] = o["status"] == "开放"
+            outfall_items.append(od)
+            status_summary[o["status"]] = status_summary.get(o["status"], 0) + 1
+            if o["status"] == "停用":
+                down_codes.append(o["outfall_code"])
         return {
             "plant": dict(row),
-            "outfalls": [dict(o) for o in outfalls],
+            "outfalls": outfall_items,
             "permits": [dict(p) for p in permits],
+            "outfall_status_summary": status_summary,
+            "down_outfall_codes": down_codes,
+            "has_down_outfall": len(down_codes) > 0,
         }
 
 

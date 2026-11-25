@@ -33,3 +33,16 @@ $env:PYTHONPATH="backend"
 python -m pytest
 python scripts/count_loc.py
 ```
+
+## effluent-06 停用排放口禁采样（2026-11-25 当日锁死）
+
+裁决取**甲路径**：排放口（如 `OF-E1-B`）一旦 `停用`，`POST /api/samples` 对该口
+**正式区零增并整笔回退**，不得出正式批（如 `SM-F03`）；强写另笔记
+`停用禁采偏航` 审计痕。停用/启用与采样抢同一把会话口锁 `outfall:{id}`，两路会话
+同口抢建后到者 409、零行并留 durable `争用失败` 痕。对账剔除停用口流量，总览停用口
+计流清零；排放口/采样/处理厂/对账/总览五页同态。详见
+[`docs/effluent-06-停用禁采裁决.md`](docs/effluent-06-停用禁采裁决.md)。
+
+闸口测试：`pytest tests/outfall_down_a.py tests/outfall_down_b.py tests/outfall_down_c.py tests/race_outfall_create.py`
+（先见三红，后分服务救绿）。
+

@@ -81,6 +81,9 @@ createApp({
     const sealableSamples = computed(() =>
       samples.value.filter((s) => ["已裁定", "已准排"].includes(s.status))
     );
+    const selectedSampleOutfall = computed(() =>
+      outfalls.value.find((o) => o.id === sampleForm.value.outfall_id) || null
+    );
 
     function statusClass(s) {
       if (!s) return "muted";
@@ -150,6 +153,9 @@ createApp({
     async function loadSample(id) { sampleDetail.value = await api.sample(id); }
     async function createPlant() { await flash(() => api.createPlant(plantForm.value)); }
     async function createOutfall() { await flash(() => api.createOutfall(outfallForm.value)); }
+    async function setOutfallStatus(o, status) {
+      await flash(() => api.setOutfallStatus(o.id, status));
+    }
     async function createSample() {
       await flash(() => api.createSample({
         outfall_id: sampleForm.value.outfall_id,
@@ -223,8 +229,9 @@ createApp({
       reconOne, reconAllItems, proofOne, reconCode, proofCode,
       plantForm, outfallForm, sampleForm, releaseForm, sealForm, permitForm,
       lineageForm, labForm, sludgeForm, releasableSamples, sealableSamples,
+      selectedSampleOutfall,
       login, logout, refresh, statusClass, sampleClass, fmtMetrics,
-      loadPlant, loadSample, createPlant, createOutfall, createSample,
+      loadPlant, loadSample, createPlant, createOutfall, setOutfallStatus, createSample,
       closeExceed, createRelease, createSeal, createPermit, createLineage,
       loadReconcile, loadReconcileOne, loadProof, enqueueLab, enqueueSludge,
     };

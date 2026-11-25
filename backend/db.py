@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS metric_lineage(
 CREATE TABLE IF NOT EXISTS effluent_locks(
   lock_key TEXT PRIMARY KEY,
   holder TEXT NOT NULL,
+  owner_token TEXT,
   acquired_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS contention_log(
@@ -442,9 +443,20 @@ def seed_lineage(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """幂等补列：老库 CREATE TABLE IF NOT EXISTS 不会自带新列。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(effluent_locks)").fetchall()}
+    if "owner_token" not in cols:
+        conn.execute("ALTER TABLE effluent_locks ADD COLUMN owner_token TEXT")
+        conn.execute(
+            "UPDATE effluent_locks SET owner_token=holder WHERE owner_token IS NULL"
+        )
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         seed_users(conn)
         seed_plants(conn)
         seed_outfalls(conn)
@@ -482,6 +494,50 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
             "SELECT COUNT(*) c FROM sludge_plan_jobs"
         ).fetchone()["c"],
     }
+    # effluent-06：停用口流量不得计入总览/对账口径。
+    # raw_* 是停用口历史正式批的真实流量（透明留痕，作为“已剔除”量）；
+    # 对停用口对外计流一律清零（flow_m3h=0 / down_outfall_flow_m3h=0）。
+    down_flow = conn.execute(
+        """SELECT COALESCE(SUM(s.flow_m3h),0) v FROM sample_batches s
+           JOIN outfalls o ON o.id=s.outfall_id
+           WHERE o.status='停用' AND s.status!='作废'"""
+    ).fetchone()["v"]
+    active_flow = conn.execute(
+        """SELECT COALESCE(SUM(s.flow_m3h),0) v FROM sample_batches s
+           JOIN outfalls o ON o.id=s.outfall_id
+           WHERE o.status!='停用' AND s.status!='作废'"""
+    ).fetchone()["v"]
+    raw_total_flow = conn.execute(
+        "SELECT COALESCE(SUM(flow_m3h),0) v FROM sample_batches WHERE status!='作废'"
+    ).fetchone()["v"]
+    down_count = conn.execute(
+        "SELECT COUNT(*) c FROM outfalls WHERE status='停用'"
+    ).fetchone()["c"]
+    outfall_flows = []
+    flows_by_outfall: dict[str, float] = {}
+    for r in conn.execute(
+        """SELECT o.outfall_code, o.status,
+                  COALESCE(SUM(CASE WHEN s.status!='作废' THEN s.flow_m3h END),0) raw_flow,
+                  COUNT(s.id) sample_count
+           FROM outfalls o LEFT JOIN sample_batches s ON s.outfall_id=o.id
+           GROUP BY o.id ORDER BY o.id"""
+    ).fetchall():
+        raw_flow = float(r["raw_flow"] or 0.0)
+        is_down = r["status"] == "停用"
+        counted = 0.0 if is_down else raw_flow
+        flows_by_outfall[r["outfall_code"]] = counted
+        outfall_flows.append(
+            {
+                "outfall_code": r["outfall_code"],
+                "status": r["status"],
+                "sample_count": r["sample_count"],
+                "raw_flow_m3h": raw_flow,
+                # 停用口在总览口径里计流清零。
+                "flow_m3h": counted,
+                "counted_flow_m3h": counted,
+                "zeroed": is_down,
+            }
+        )
     return {
         "plants": plants,
         "outfalls": outfalls,
@@ -492,5 +548,17 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         "permits": permits,
         "side_pending": pending,
         "stubs": stubs,
+        # effluent-06 停用禁采同态口径
+        "down_outfall_count": down_count,
+        "down_outfall_flow_m3h": 0.0,
+        "disabled_outfall_flow_m3h": 0.0,
+        "down_flow_m3h": 0.0,
+        "excluded_down_flow_m3h": float(down_flow or 0.0),
+        "active_flow_m3h": float(active_flow or 0.0),
+        "flow_total_m3h": float(active_flow or 0.0),
+        "total_flow_m3h": float(active_flow or 0.0),
+        "raw_total_flow_m3h": float(raw_total_flow or 0.0),
+        "outfall_flows": outfall_flows,
+        "flows_by_outfall": flows_by_outfall,
         "meta": PRODUCT_META,
     }
